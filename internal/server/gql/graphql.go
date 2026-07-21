@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"entgo.io/contrib/entgql"
 	"entgo.io/ent/privacy"
@@ -78,6 +79,7 @@ type Dependencies struct {
 	CandidateSelectorDiagnostics   *orchestrator.CandidateSelectorDiagnostics
 	ChannelLimiterManager          *orchestrator.ChannelLimiterManager
 	HttpClient                     *httpclient.HttpClient
+	LLMRequestTimeout              time.Duration `name:"llm_request_timeout" optional:"true"`
 	GCWorker                       *gc.Worker
 	VideoWorker                    *video_storage.Worker
 }
@@ -117,6 +119,7 @@ func NewGraphqlHandlers(deps Dependencies) *GraphqlHandler {
 			deps.CandidateSelectorDiagnostics,
 			deps.ChannelLimiterManager,
 			deps.HttpClient,
+			deps.LLMRequestTimeout,
 			deps.GCWorker,
 			deps.VideoWorker,
 		),

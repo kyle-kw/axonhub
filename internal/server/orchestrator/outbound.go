@@ -122,23 +122,9 @@ func (ts *OutboundPersistentStream) Close() error {
 		return ts.stream.Close()
 	}
 
-	// If there's an explicit stream error (not just context cancellation), treat as failure
-	// regardless of what chunks we have. Stream errors indicate the upstream response
-	// was incomplete or corrupted.
-	if streamErr != nil && !errors.Is(streamErr, context.Canceled) && !errors.Is(streamErr, context.DeadlineExceeded) {
-		ts.logFinalizationDecision(ctx, "explicit_stream_error", streamErr, ctxErr, false, nil)
-		persistCtx, cancel := xcontext.DetachWithTimeout(ctx, 10*time.Second)
-		defer cancel()
-
-		if ts.requestExec != nil {
-			if err := ts.RequestService.UpdateRequestExecutionStatusFromError(persistCtx, ts.requestExec.ID, streamErr); err != nil {
-				log.Warn(persistCtx, "Failed to update request execution status from error", log.Cause(err))
-			}
-		}
-
-		return ts.stream.Close()
-	}
-
+	// Prefer aggregation rescue before treating transport errors as hard failures.
+	// Some providers close the connection after the final content/finish chunk
+	// without a terminal event; if aggregation shows a completed response, keep it.
 	var responseBody []byte
 	var meta llm.ResponseMeta
 	var aggErr error
@@ -154,6 +140,22 @@ func (ts *OutboundPersistentStream) Close() error {
 		}
 	} else {
 		ts.logFinalizationDecision(ctx, "no_outbound_chunks_to_aggregate", streamErr, ctxErr, false, nil)
+	}
+
+	// If there's an explicit stream error (not just context cancellation), and we
+	// could not rescue a completed response above, treat as failure.
+	if !ts.state.StreamCompleted && streamErr != nil && !errors.Is(streamErr, context.Canceled) && !errors.Is(streamErr, context.DeadlineExceeded) {
+		ts.logFinalizationDecision(ctx, "explicit_stream_error", streamErr, ctxErr, aggregatedCompleted, aggErr)
+		persistCtx, cancel := xcontext.DetachWithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		if ts.requestExec != nil {
+			if err := ts.RequestService.UpdateRequestExecutionStatusFromError(persistCtx, ts.requestExec.ID, streamErr); err != nil {
+				log.Warn(persistCtx, "Failed to update request execution status from error", log.Cause(err))
+			}
+		}
+
+		return ts.stream.Close()
 	}
 
 	// ended without a terminal event / complete aggregated response.

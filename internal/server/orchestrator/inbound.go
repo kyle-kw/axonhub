@@ -122,24 +122,10 @@ func (ts *InboundPersistentStream) Close() error {
 		return ts.stream.Close()
 	}
 
-	// If there's an explicit stream error (not just context cancellation), treat as failure
-	// regardless of what chunks we have. Stream errors indicate the upstream response
-	// was incomplete or corrupted.
-	if streamErr != nil && !errors.Is(streamErr, context.Canceled) && !errors.Is(streamErr, context.DeadlineExceeded) {
-		if ts.request != nil {
-			persistCtx := context.WithoutCancel(ctx)
-
-			if err := ts.requestService.UpdateRequestStatusFromError(persistCtx, ts.request.ID, streamErr); err != nil {
-				log.Warn(persistCtx, "Failed to update request status from error", log.Cause(err))
-			}
-		}
-
-		return ts.stream.Close()
-	}
-
-	// If we haven't received a terminal event, check if the chunks we DO have form a complete response.
-	// This handles models that aggregate internally (like Codex) or upstream proxy hung connections
-	// where the provider sent the full JSON payload but failed to send [DONE] before dropping.
+	// Prefer aggregation rescue before treating transport errors as hard failures.
+	// Providers (and some proxies) may drop the connection after the final content
+	// chunk without a [DONE] sentinel; if the aggregated body is complete we still
+	// want the request marked completed rather than canceled/failed.
 	var responseBody []byte
 	var meta llm.ResponseMeta
 	var aggErr error
@@ -150,6 +136,20 @@ func (ts *InboundPersistentStream) Close() error {
 			log.Debug(ctx, "Stream has valid complete response without terminal event, treating as completed")
 			ts.state.StreamCompleted = true
 		}
+	}
+
+	// If there's an explicit stream error (not just context cancellation), and we
+	// could not rescue a completed response above, treat as failure.
+	if !ts.state.StreamCompleted && streamErr != nil && !errors.Is(streamErr, context.Canceled) && !errors.Is(streamErr, context.DeadlineExceeded) {
+		if ts.request != nil {
+			persistCtx := context.WithoutCancel(ctx)
+
+			if err := ts.requestService.UpdateRequestStatusFromError(persistCtx, ts.request.ID, streamErr); err != nil {
+				log.Warn(persistCtx, "Failed to update request status from error", log.Cause(err))
+			}
+		}
+
+		return ts.stream.Close()
 	}
 
 	// Check if context was canceled (client disconnected before [DONE]).

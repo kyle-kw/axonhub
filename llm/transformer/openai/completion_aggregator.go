@@ -25,6 +25,7 @@ func AggregateCompletionStreamChunks(ctx context.Context, chunks []*httpclient.S
 		usage             *llm.Usage
 		accumulatedText   string
 		finishReason      *string
+		sawFinishReason   bool
 	)
 
 	for _, chunk := range chunks {
@@ -53,6 +54,7 @@ func AggregateCompletionStreamChunks(ctx context.Context, chunks []*httpclient.S
 			accumulatedText += choice.Text
 			if choice.FinishReason != nil {
 				finishReason = choice.FinishReason
+				sawFinishReason = true
 			}
 		}
 
@@ -98,8 +100,11 @@ func AggregateCompletionStreamChunks(ctx context.Context, chunks []*httpclient.S
 		return nil, llm.ResponseMeta{}, err
 	}
 
+	completed := sawFinishReason || (usage != nil && usage.CompletionTokens > 0)
+
 	return data, llm.ResponseMeta{
-		ID:    id,
-		Usage: usage,
+		ID:        id,
+		Usage:     usage,
+		Completed: completed,
 	}, nil
 }

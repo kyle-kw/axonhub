@@ -39,9 +39,14 @@ type TestChannelOrchestrator struct {
 	modelMapper                 *ModelMapper
 	loadBalancer                *LoadBalancer
 	channelLimiterManager       *ChannelLimiterManager
+	// llmRequestTimeout bounds provider calls independently of the admin GraphQL
+	// request_timeout (default 30s), which is too short for model tests.
+	llmRequestTimeout time.Duration
 }
 
 // NewTestChannelOrchestrator creates a new TestChannelOrchestrator.
+// llmRequestTimeout should be server.Config.LLMRequestTimeout (default 600s).
+// A non-positive value falls back to 600s.
 func NewTestChannelOrchestrator(
 	channelService *biz.ChannelService,
 	requestService *biz.RequestService,
@@ -49,7 +54,12 @@ func NewTestChannelOrchestrator(
 	usageLogService *biz.UsageLogService,
 	promptProtectionRuleService *biz.PromptProtectionRuleService,
 	httpClient *httpclient.HttpClient,
+	llmRequestTimeout time.Duration,
 ) *TestChannelOrchestrator {
+	if llmRequestTimeout <= 0 {
+		llmRequestTimeout = 600 * time.Second
+	}
+
 	return &TestChannelOrchestrator{
 		channelService:              channelService,
 		requestService:              requestService,
@@ -61,7 +71,14 @@ func NewTestChannelOrchestrator(
 		modelMapper:                 NewModelMapper(),
 		loadBalancer:                NewLoadBalancer(systemService, channelService, NewWeightStrategy()),
 		channelLimiterManager:       NewChannelLimiterManager(),
+		llmRequestTimeout:           llmRequestTimeout,
 	}
+}
+
+// withLLMTimeout detaches from the parent request deadline (e.g. admin GraphQL
+// request_timeout) and applies the longer LLM timeout used by /v1 APIs.
+func (processor *TestChannelOrchestrator) withLLMTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), processor.llmRequestTimeout)
 }
 
 // TestChannelRequest represents a channel test request.
@@ -85,6 +102,8 @@ func (processor *TestChannelOrchestrator) TestChannel(
 	modelID *string,
 	proxy *httpclient.ProxyConfig,
 ) (*TestChannelResult, error) {
+	ctx, cancel := processor.withLLMTimeout(ctx)
+	defer cancel()
 	inbound := openai.NewInboundTransformer()
 	// Create ChatCompletionOrchestrator for this test request
 	chatProcessor := &ChatCompletionOrchestrator{
@@ -324,6 +343,8 @@ func (processor *TestChannelOrchestrator) TestChannelAPIKeys(
 	modelID *string,
 	proxy *httpclient.ProxyConfig,
 ) (*TestChannelAPIKeysResult, error) {
+	ctx, cancel := processor.withLLMTimeout(ctx)
+	defer cancel()
 	ch, err := processor.channelService.GetChannel(ctx, channelID.ID)
 	if err != nil {
 		return nil, err
@@ -415,6 +436,8 @@ func (processor *TestChannelOrchestrator) TestSingleAPIKey(
 	modelID *string,
 	proxy *httpclient.ProxyConfig,
 ) (*TestAPIKeyResult, error) {
+	ctx, cancel := processor.withLLMTimeout(ctx)
+	defer cancel()
 	ch, err := processor.channelService.GetChannel(ctx, channelID.ID)
 	if err != nil {
 		return nil, err

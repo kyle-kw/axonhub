@@ -2,6 +2,7 @@ package gql
 
 import (
 	"errors"
+	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 
@@ -84,6 +85,7 @@ func NewSchema(
 	candidateSelectorDiagnostics *orchestrator.CandidateSelectorDiagnostics,
 	channelLimiterManager *orchestrator.ChannelLimiterManager,
 	httpClient *httpclient.HttpClient,
+	llmRequestTimeout time.Duration,
 	gcWorker *gc.Worker,
 	videoWorker *video_storage.Worker,
 ) graphql.ExecutableSchema {
@@ -117,7 +119,7 @@ func NewSchema(
 			defaultSelector:                defaultSelector,
 			candidateSelectorDiagnostics:   candidateSelectorDiagnostics,
 			channelLimiterManager:          channelLimiterManager,
-			TestChannelOrchestrator:        orchestrator.NewTestChannelOrchestrator(channelService, requestService, systemService, usageLogService, promptProtectionRuleService, httpClient),
+			TestChannelOrchestrator:        orchestrator.NewTestChannelOrchestrator(channelService, requestService, systemService, usageLogService, promptProtectionRuleService, httpClient, llmRequestTimeout),
 			gcWorker:                       gcWorker,
 			videoWorker:                    videoWorker,
 		},

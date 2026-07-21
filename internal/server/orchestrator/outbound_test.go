@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
 
@@ -802,6 +803,67 @@ func TestOutboundPersistentStream_Close_AggregatedResponsesCompletionHandling(t 
 		require.Equal(t, requestexecution.StatusCompleted, dbExec.Status)
 		require.JSONEq(t, string(aggregated), string(dbExec.ResponseBody))
 		require.Equal(t, "resp_codex_like", dbExec.ExternalID)
+		require.True(t, state.StreamCompleted)
+	})
+
+	t.Run("eof after finished stream without usage is completed", func(t *testing.T) {
+		client := enttest.NewEntClient(t, "sqlite3", "file:ent?mode=memory&_fk=0")
+		defer client.Close()
+
+		baseCtx := ent.NewContext(ctx, client)
+		project := createTestProject(t, baseCtx, client)
+		ch := createTestChannel(t, baseCtx, client)
+		_, requestService, _, usageLogService := setupTestServices(t, client)
+
+		req, err := client.Request.Create().
+			SetProjectID(project.ID).
+			SetChannelID(ch.ID).
+			SetModelID("grok-4.5").
+			SetStatus(request.StatusPending).
+			SetRequestBody([]byte(`{"stream":true}`)).
+			Save(baseCtx)
+		require.NoError(t, err)
+
+		exec, err := client.RequestExecution.Create().
+			SetRequestID(req.ID).
+			SetProjectID(project.ID).
+			SetChannelID(ch.ID).
+			SetModelID("grok-4.5").
+			SetRequestBody([]byte(`{"stream":true}`)).
+			SetFormat("openai/chat_completion").
+			SetStatus(requestexecution.StatusPending).
+			SetStream(true).
+			Save(baseCtx)
+		require.NoError(t, err)
+
+		aggregated := []byte(`{"id":"chatcmpl-xai","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
+		stream := &sliceEventStream{
+			events: []*httpclient.StreamEvent{
+				{Data: []byte(`{"id":"chatcmpl-xai","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`)},
+				{Data: []byte(`{"id":"chatcmpl-xai","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)},
+			},
+			err: io.EOF,
+		}
+		transformer := &mockTransformer{
+			apiFormat:          llm.APIFormatOpenAIChatCompletion,
+			aggregatedResponse: aggregated,
+			aggregatedMeta: llm.ResponseMeta{
+				ID:        "chatcmpl-xai",
+				Completed: true,
+			},
+		}
+		state := &PersistenceState{}
+
+		persistentStream := NewOutboundPersistentStream(baseCtx, stream, req, exec, requestService, usageLogService, transformer, nil, state)
+		for persistentStream.Next() {
+			_ = persistentStream.Current()
+		}
+		require.NoError(t, persistentStream.Close())
+
+		dbExec, err := client.RequestExecution.Get(baseCtx, exec.ID)
+		require.NoError(t, err)
+		require.Equal(t, requestexecution.StatusCompleted, dbExec.Status)
+		require.JSONEq(t, string(aggregated), string(dbExec.ResponseBody))
 		require.True(t, state.StreamCompleted)
 	})
 }

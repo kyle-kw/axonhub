@@ -8,8 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/looplj/axonhub/internal/authz"
 	"github.com/looplj/axonhub/internal/ent"
 	"github.com/looplj/axonhub/internal/ent/enttest"
+	"github.com/looplj/axonhub/internal/ent/request"
 	"github.com/looplj/axonhub/internal/pkg/xcache"
 	"github.com/looplj/axonhub/internal/server/biz"
 	"github.com/looplj/axonhub/llm"
@@ -178,6 +180,74 @@ func TestInboundPersistentStream_Close_WithCompleteResponse(t *testing.T) {
 	assert.True(t, state.StreamCompleted, "StreamCompleted should be true after Close() with complete response")
 	assert.True(t, mockStream.closed, "Stream should be closed")
 }
+
+func TestInboundPersistentStream_Close_CanceledWithFinishReasonIsCompleted(t *testing.T) {
+	// Client disconnect after a finished stream (no [DONE], no usage) must still
+	// mark StreamCompleted so request logs are not stuck on "canceled".
+	contentChunk := &httpclient.StreamEvent{
+		Type: "chunk",
+		Data: []byte(`{"id":"chatcmpl-xai","object":"chat.completion.chunk","created":1,"model":"grok-4.5","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`),
+	}
+	finishChunk := &httpclient.StreamEvent{
+		Type: "chunk",
+		Data: []byte(`{"id":"chatcmpl-xai","object":"chat.completion.chunk","created":1,"model":"grok-4.5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`),
+	}
+
+	mockStream := &mockStream{
+		events: []*httpclient.StreamEvent{contentChunk, finishChunk},
+		err:    context.Canceled,
+	}
+
+	mockTransformer := &mockInboundTransformer{
+		aggregateResponseBody: []byte(`{"id":"chatcmpl-xai","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`),
+		aggregateMeta: llm.ResponseMeta{
+			ID:        "chatcmpl-xai",
+			Completed: true,
+		},
+	}
+
+	client := enttest.NewEntClient(t, "sqlite3", "file:ent?mode=memory&_fk=0")
+	defer client.Close()
+
+	baseCtx := authz.WithTestBypass(ent.NewContext(context.Background(), client))
+	requestService := createTestRequestService(t, client)
+
+	// Persist a real request row so status updates can be asserted.
+	req, err := client.Request.Create().
+		SetModelID("grok-4.5").
+		SetStatus(request.StatusProcessing).
+		SetRequestBody([]byte(`{"stream":true}`)).
+		SetStream(true).
+		Save(baseCtx)
+	require.NoError(t, err)
+
+	state := &PersistenceState{}
+	requestCtx, cancel := context.WithCancel(baseCtx)
+	cancel()
+
+	stream := NewInboundPersistentStream(
+		requestCtx,
+		mockStream,
+		req,
+		&ent.RequestExecution{ID: 1},
+		requestService,
+		mockTransformer,
+		nil,
+		state,
+	)
+
+	for stream.Next() {
+		_ = stream.Current()
+	}
+	require.NoError(t, stream.Close())
+
+	assert.True(t, state.StreamCompleted)
+
+	dbReq, err := client.Request.Get(baseCtx, req.ID)
+	require.NoError(t, err)
+	assert.Equal(t, request.StatusCompleted, dbReq.Status)
+}
+
 
 // TestInboundPersistentStream_Close_WithTerminalEvent tests the EXISTING behavior:
 // terminal event (e.g., [DONE] event from OpenAI)

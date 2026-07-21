@@ -146,6 +146,53 @@ func TestAggregateStreamChunks(t *testing.T) {
 	}
 }
 
+func TestAggregateStreamChunks_CompletedMeta(t *testing.T) {
+	t.Parallel()
+
+	t.Run("finish_reason without usage marks completed", func(t *testing.T) {
+		t.Parallel()
+
+		chunks := []*httpclient.StreamEvent{
+			{Data: []byte(`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"grok","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}`)},
+			{Data: []byte(`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"grok","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)},
+		}
+
+		_, meta, err := AggregateStreamChunks(context.Background(), chunks, DefaultTransformChunk)
+		require.NoError(t, err)
+		require.Equal(t, "chatcmpl-1", meta.ID)
+		require.True(t, meta.Completed)
+	})
+
+	t.Run("truncated content without finish_reason is not completed", func(t *testing.T) {
+		t.Parallel()
+
+		chunks := []*httpclient.StreamEvent{
+			{Data: []byte(`{"id":"chatcmpl-2","object":"chat.completion.chunk","created":1,"model":"grok","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}`)},
+		}
+
+		_, meta, err := AggregateStreamChunks(context.Background(), chunks, DefaultTransformChunk)
+		require.NoError(t, err)
+		require.Equal(t, "chatcmpl-2", meta.ID)
+		require.False(t, meta.Completed)
+	})
+
+	t.Run("usage completion tokens marks completed", func(t *testing.T) {
+		t.Parallel()
+
+		chunks := []*httpclient.StreamEvent{
+			{Data: []byte(`{"id":"chatcmpl-3","object":"chat.completion.chunk","created":1,"model":"grok","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}`)},
+			{Data: []byte(`{"id":"chatcmpl-3","object":"chat.completion.chunk","created":1,"model":"grok","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)},
+		}
+
+		_, meta, err := AggregateStreamChunks(context.Background(), chunks, DefaultTransformChunk)
+		require.NoError(t, err)
+		require.True(t, meta.Completed)
+		require.NotNil(t, meta.Usage)
+		require.Equal(t, int64(2), meta.Usage.CompletionTokens)
+	})
+}
+
+
 func TestAggregateStreamChunks_EmptyChunks(t *testing.T) {
 	gotBytes, _, err := AggregateStreamChunks(context.Background(), nil, DefaultTransformChunk)
 	require.NoError(t, err)

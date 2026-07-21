@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/fx"
@@ -99,6 +100,7 @@ func Run(opts ...fx.Option) {
 			video_storage.Module,
 			api.Module,
 			fx.Provide(fx.Annotate(func(cfg Config) string { return cfg.PublicURL }, fx.ResultTags(`name:"public_url"`))),
+			fx.Provide(fx.Annotate(func(cfg Config) time.Duration { return cfg.LLMRequestTimeout }, fx.ResultTags(`name:"llm_request_timeout"`))),
 			fx.Invoke(func(cfg log.Config) {
 				log.SetGlobalConfig(cfg)
 				tracing.SetupLogger(log.GetGlobalLogger())

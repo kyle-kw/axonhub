@@ -217,11 +217,15 @@ func AggregateStreamChunks(_ context.Context, chunks []*httpclient.StreamEvent) 
 	}
 
 	meta := llm.ResponseMeta{
-		ID: agg.responseID,
+		ID:        agg.responseID,
+		Completed: agg.status == "completed" || agg.status == "incomplete",
 	}
 
 	if agg.usage != nil {
 		meta.Usage = agg.usage.ToUsage()
+		if !meta.Completed && meta.Usage != nil && meta.Usage.CompletionTokens > 0 {
+			meta.Completed = true
+		}
 	}
 
 	return body, meta, nil

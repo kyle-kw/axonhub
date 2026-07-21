@@ -385,8 +385,24 @@ func AggregateStreamChunks(ctx context.Context, chunks []*httpclient.StreamEvent
 		return nil, llm.ResponseMeta{}, err
 	}
 
+	// Mark completed when the upstream stream actually terminated a choice
+	// (finish_reason present on a chunk) or reported completion usage.
+	// Do NOT treat the synthesized default "stop" as completion — that would
+	// mark truncated streams (client cancel / upstream drop mid-token) as done.
+	completed := false
+	for _, choiceAgg := range choicesAggs {
+		if choiceAgg.finishReason != nil {
+			completed = true
+			break
+		}
+	}
+	if !completed && responseUsage != nil && responseUsage.CompletionTokens > 0 {
+		completed = true
+	}
+
 	return data, llm.ResponseMeta{
-		ID:    response.ID,
-		Usage: responseUsage,
+		ID:        response.ID,
+		Usage:     responseUsage,
+		Completed: completed,
 	}, nil
 }
