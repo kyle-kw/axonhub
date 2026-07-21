@@ -454,11 +454,12 @@ function validateOAuthCredentials(type: string, apiKey: string | undefined, ctx:
     return;
   }
 
-  // GitHub Copilot only requires access_token, others may require refresh_token
+  // GitHub Copilot only requires access_token; xAI / Codex / Claude require refresh_token for rotation.
+  const requiresRefreshToken = !isCopilot;
   const parsed = z
     .object({
       access_token: z.string().min(1),
-      refresh_token: isCopilot ? z.string().optional() : z.string().min(1),
+      refresh_token: requiresRefreshToken ? z.string().min(1) : z.string().optional(),
     })
     .safeParse(json);
 
@@ -501,7 +502,11 @@ export const createChannelInputSchema = z
   })
   .superRefine((data, ctx) => {
     const isOAuthType =
-      data.type === 'codex' || data.type === 'claudecode' || data.type === 'antigravity' || data.type === 'github_copilot';
+      data.type === 'codex' ||
+      data.type === 'claudecode' ||
+      data.type === 'antigravity' ||
+      data.type === 'github_copilot' ||
+      data.type === 'xai';
     const hasApiKey = data.credentials.apiKey && data.credentials.apiKey.trim().length > 0;
     const hasApiKeys = data.credentials.apiKeys && data.credentials.apiKeys.some((k) => k.trim().length > 0);
 
@@ -524,6 +529,7 @@ export const createChannelInputSchema = z
     }
 
     // For OAuth types, validate the OAuth JSON format if apiKey is provided
+    // xAI may use either OAuth (apiKey JSON) or plain API keys (apiKeys) — only validate when JSON is set.
     if (isOAuthType && hasApiKey) {
       validateOAuthCredentials(data.type, data.credentials.apiKey, ctx);
     }
@@ -596,7 +602,11 @@ export const updateChannelInputSchema = z
     // For OAuth validation on updates: validate if type is OAuth, or if credentials.apiKey is provided
     // (which indicates OAuth credentials are being set)
     const isOAuthType =
-      effectiveType === 'codex' || effectiveType === 'claudecode' || effectiveType === 'antigravity' || effectiveType === 'github_copilot';
+      effectiveType === 'codex' ||
+      effectiveType === 'claudecode' ||
+      effectiveType === 'antigravity' ||
+      effectiveType === 'github_copilot' ||
+      effectiveType === 'xai';
 
     // Derive type from parent context if not available
     let derivedType = effectiveType;

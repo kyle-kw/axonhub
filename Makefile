@@ -24,13 +24,18 @@ build-backend:
 	@echo "Backend build completed!"
 
 # Build the frontend application
+# File ops must be OS-aware: GNU coreutils (rm/cp/mkdir -p) are not on Windows PATH by default.
 build-frontend:
 	@echo "Building axonhub frontend..."
 	cd frontend && pnpm vite build
 	@echo "Copying frontend dist to server static directory..."
+ifeq ($(OS),Windows_NT)
+	powershell -NoProfile -Command "if (Test-Path 'internal/server/static/dist/assets') { Remove-Item -Recurse -Force 'internal/server/static/dist/assets' }; New-Item -ItemType Directory -Force -Path 'internal/server/static/dist' | Out-Null; Copy-Item -Path 'frontend/dist/*' -Destination 'internal/server/static/dist' -Recurse -Force"
+else
 	rm -rf internal/server/static/dist/assets
 	mkdir -p internal/server/static/dist
 	cp -r frontend/dist/* internal/server/static/dist/
+endif
 	@echo "Frontend build completed!"
 
 # Build both frontend and backend

@@ -8,6 +8,7 @@ import (
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/auth"
 	"github.com/looplj/axonhub/llm/httpclient"
+	"github.com/looplj/axonhub/llm/oauth"
 	"github.com/looplj/axonhub/llm/streams"
 	"github.com/looplj/axonhub/llm/transformer"
 	"github.com/looplj/axonhub/llm/transformer/openai"
@@ -23,8 +24,13 @@ type Config struct {
 	// API configuration
 	BaseURL string `json:"base_url,omitempty"` // Custom base URL (optional, defaults to DefaultBaseURL)
 
-	// APIKeyProvider provides API keys for authentication.
+	// APIKeyProvider provides API keys for authentication (API-key mode).
+	// Required when TokenProvider is nil.
 	APIKeyProvider auth.APIKeyProvider `json:"-"`
+
+	// TokenProvider provides OAuth access tokens with auto-refresh (OAuth mode).
+	// When set, Bearer auth uses the access token from this provider.
+	TokenProvider oauth.TokenGetter `json:"-"`
 }
 
 // OutboundTransformer implements transformer.Outbound for xAI format.
@@ -55,10 +61,17 @@ func NewOutboundTransformerWithConfig(config *Config) (transformer.Outbound, err
 		return nil, fmt.Errorf("invalid xAI transformer configuration: %w", err)
 	}
 
+	// Underlying OpenAI outbound always needs an APIKeyProvider; for OAuth mode we use a
+	// placeholder and overwrite Authorization after TransformRequest with a fresh access token.
+	apiKeyProvider := config.APIKeyProvider
+	if apiKeyProvider == nil {
+		apiKeyProvider = auth.NewStaticKeyProvider("oauth")
+	}
+
 	openaiConfig := &openai.Config{
 		PlatformType:   openai.PlatformOpenAI,
 		BaseURL:        config.BaseURL,
-		APIKeyProvider: config.APIKeyProvider,
+		APIKeyProvider: apiKeyProvider,
 		ReasoningField: openai.ReasoningFieldContent,
 	}
 
@@ -73,14 +86,23 @@ func NewOutboundTransformerWithConfig(config *Config) (transformer.Outbound, err
 	}, nil
 }
 
+// TokenProvider returns the OAuth token provider when configured (for channel rebuild reuse).
+func (t *OutboundTransformer) TokenProvider() oauth.TokenGetter {
+	if t == nil || t.config == nil {
+		return nil
+	}
+
+	return t.config.TokenProvider
+}
+
 // validateConfig validates the configuration.
 func validateConfig(config *Config) error {
 	if config == nil {
 		return errors.New("config cannot be nil")
 	}
 
-	if config.APIKeyProvider == nil {
-		return errors.New("API key provider is required")
+	if config.APIKeyProvider == nil && config.TokenProvider == nil {
+		return errors.New("API key provider or OAuth token provider is required")
 	}
 
 	if config.BaseURL == "" {
@@ -122,7 +144,28 @@ func (t *OutboundTransformer) TransformRequest(
 		// Do nothing
 	}
 
-	return t.Outbound.TransformRequest(ctx, chatReq)
+	req, err := t.Outbound.TransformRequest(ctx, chatReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// OAuth mode: replace Bearer auth with a (possibly refreshed) access token.
+	if t.config != nil && t.config.TokenProvider != nil {
+		creds, err := t.config.TokenProvider.Get(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get xAI OAuth token: %w", err)
+		}
+		if creds == nil || creds.AccessToken == "" {
+			return nil, errors.New("xAI OAuth access token is empty")
+		}
+
+		req.Auth = &httpclient.AuthConfig{
+			Type:   "bearer",
+			APIKey: creds.AccessToken,
+		}
+	}
+
+	return req, nil
 }
 
 func IsValidResponse(event *llm.Response) bool {

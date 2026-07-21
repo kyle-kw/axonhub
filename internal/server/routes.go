@@ -33,6 +33,7 @@ type Handlers struct {
 	ClaudeCode     *api.ClaudeCodeHandlers
 	Antigravity    *api.AntigravityHandlers
 	Copilot        *api.CopilotHandlers
+	Xai            *api.XaiHandlers
 	RequestContent *api.RequestContentHandlers
 	OIDC           *api.OIDCHandlers
 	RequestPreview *api.RequestPreviewHandlers
@@ -118,6 +119,9 @@ func SetupRoutes(server *Server, handlers Handlers, client *ent.Client, services
 
 		adminGroup.POST("/copilot/oauth/start", handlers.Copilot.StartOAuth)
 		adminGroup.POST("/copilot/oauth/poll", handlers.Copilot.PollOAuth)
+
+		adminGroup.POST("/xai/oauth/start", handlers.Xai.StartOAuth)
+		adminGroup.POST("/xai/oauth/poll", handlers.Xai.PollOAuth)
 
 		// OIDC Manual Linking
 		adminGroup.GET("/oidc/link/:provider", handlers.OIDC.GetLinkAuthorizeURL)

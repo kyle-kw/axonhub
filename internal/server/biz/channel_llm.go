@@ -457,7 +457,7 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 
 	//nolint:exhaustive // Checked.
 	switch c.Type {
-	case channel.TypeCodex, channel.TypeClaudecode:
+	case channel.TypeCodex, channel.TypeClaudecode, channel.TypeXai:
 		if !c.Credentials.IsOAuth() && len(enabledKeys) == 0 {
 			return nil, fmt.Errorf("missing credentials: oauth or api key required for channel %s", c.Name)
 		}
@@ -622,6 +622,54 @@ func (svc *ChannelService) buildChannelWithTransformer(c *ent.Channel, apiKeyOve
 
 		return ch, nil
 	case channel.TypeXai:
+		if c.Credentials.IsOAuth() {
+			credsJSON := strings.TrimSpace(c.Credentials.APIKey)
+			if c.Credentials.OAuth != nil {
+				o := c.Credentials.OAuth
+
+				creds, err := (&oauth.OAuthCredentials{
+					AccessToken:  o.AccessToken,
+					RefreshToken: o.RefreshToken,
+					ClientID:     o.ClientID,
+					ExpiresAt:    o.ExpiresAt,
+					TokenType:    o.TokenType,
+					Scopes:       o.Scopes,
+					IDToken:      o.IDToken,
+				}).ToJSON()
+				if err != nil {
+					return nil, fmt.Errorf("failed to encode xai oauth credentials: %w", err)
+				}
+
+				credsJSON = creds
+			}
+
+			creds, err := oauth.ParseCredentialsJSON(credsJSON)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse xai oauth credentials: %w", err)
+			}
+
+			tokens := xai.NewTokenProvider(xai.TokenProviderParams{
+				Credentials: creds,
+				HTTPClient:  httpClient,
+				OnRefreshed: svc.onTokenRefreshed(c),
+			})
+
+			transformer, err := xai.NewOutboundTransformerWithConfig(&xai.Config{
+				BaseURL:       c.BaseURL,
+				TokenProvider: tokens,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to create outbound transformer: %w", err)
+			}
+
+			ch.Outbound = transformer
+			if ch.startTokenProvider == nil {
+				setupAutoRefresh(ch, tokens, oauth.AutoRefreshOptions{})
+			}
+
+			return ch, nil
+		}
+
 		transformer, err := xai.NewOutboundTransformerWithConfig(&xai.Config{
 			BaseURL:        c.BaseURL,
 			APIKeyProvider: getAPIKeyProvider(ch),

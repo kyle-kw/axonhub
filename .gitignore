@@ -136,6 +136,8 @@ internal/server/static/dist/*
 coverage.out
 *.test
 *.backup
+# Local Go build artifacts (Windows)
+*.exe
 
 .playwright-cli/
 

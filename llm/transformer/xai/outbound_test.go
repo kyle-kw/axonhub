@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/auth"
+	"github.com/looplj/axonhub/llm/oauth"
 	"github.com/looplj/axonhub/llm/streams"
 )
 
@@ -594,4 +596,57 @@ func (t *OutboundTransformer) applyStreamFilter(ctx context.Context, stream stre
 
 		return hasContent
 	}), nil
+}
+
+func TestOutboundTransformer_OAuthBearerAuth(t *testing.T) {
+	creds := &oauth.OAuthCredentials{
+		AccessToken:  "oauth-access-token",
+		RefreshToken: "oauth-refresh-token",
+		ClientID:     ClientID,
+		ExpiresAt:    time.Now().Add(time.Hour),
+		TokenType:    "bearer",
+	}
+	provider := oauth.NewStaticTokenProvider(creds)
+
+	tf, err := NewOutboundTransformerWithConfig(&Config{
+		BaseURL:       DefaultBaseURL,
+		TokenProvider: provider,
+	})
+	require.NoError(t, err)
+
+	req, err := tf.TransformRequest(context.Background(), &llm.Request{
+		Model: "grok-3",
+		Messages: []llm.Message{
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, req.Auth)
+	require.Equal(t, "bearer", req.Auth.Type)
+	require.Equal(t, "oauth-access-token", req.Auth.APIKey)
+}
+
+func TestOutboundTransformer_APIKeyBearerAuth(t *testing.T) {
+	tf, err := NewOutboundTransformerWithConfig(&Config{
+		BaseURL:        DefaultBaseURL,
+		APIKeyProvider: auth.NewStaticKeyProvider("xai-api-key"),
+	})
+	require.NoError(t, err)
+
+	req, err := tf.TransformRequest(context.Background(), &llm.Request{
+		Model: "grok-3",
+		Messages: []llm.Message{
+			{Role: "user", Content: llm.MessageContent{Content: lo.ToPtr("hi")}},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, req.Auth)
+	require.Equal(t, "bearer", req.Auth.Type)
+	require.Equal(t, "xai-api-key", req.Auth.APIKey)
+}
+
+func TestOutboundTransformer_RequiresAuth(t *testing.T) {
+	_, err := NewOutboundTransformerWithConfig(&Config{BaseURL: DefaultBaseURL})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "API key provider or OAuth token provider")
 }

@@ -61,6 +61,7 @@ import { mergeChannelSettingsForUpdate } from '../utils/merge';
 import { isValidModelPattern, matchesModelPattern } from '../utils/pattern';
 import { ProxyType } from './channels-proxy-dialog';
 import { CopilotDeviceFlow } from './copilot-device-flow';
+import { XaiDeviceFlow } from './xai-device-flow';
 import { ManualModelBadge } from './manual-model-badge';
 
 interface Props {
@@ -761,6 +762,7 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
   const isClineType = activeChannelType === 'cline';
   const isClaudeCodeType = activeChannelType === 'claudecode';
   const isCopilotType = activeChannelType === 'github_copilot';
+  const isXaiType = activeChannelType === 'xai';
   const isOpenCodeGoType = isOpenCodeGoChannelType(activeChannelType);
 
   // OAuth providers cannot have their provider/API format changed during edit.
@@ -1473,9 +1475,13 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
       return !!baseURL;
     }
 
-    if (isCopilotType) {
+    if (isCopilotType || isXaiType) {
       const oauthApiKey = form.watch('credentials.apiKey');
       const hasOAuthToken = !!parseOauthToken(oauthApiKey || '');
+      // xAI supports either OAuth or API key; Copilot is OAuth-only.
+      if (isXaiType) {
+        return !!baseURL && (hasOAuthToken || !!hasApiKey);
+      }
       return !!baseURL && hasOAuthToken;
     }
 
@@ -1977,6 +1983,39 @@ export function ChannelsActionDialog({ currentRow, duplicateFromRow, open, onOpe
                                   token_type: 'bearer',
                                 });
                                 form.setValue('credentials.apiKey', oauthCredentials, { shouldDirty: true, shouldValidate: true });
+                              }}
+                              onError={(error) => {
+                                toast.error(error);
+                              }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {isXaiType && (
+                        <div className='grid grid-cols-1 items-start gap-x-6 gap-y-2 md:grid-cols-8'>
+                          <FormLabel className='pt-2 font-medium md:col-span-2 md:text-right'>
+                            {t('channels.dialogs.xai.labels.oauth')}
+                          </FormLabel>
+                          <div className='space-y-4 md:col-span-6'>
+                            <XaiDeviceFlow
+                              existingCredentials={
+                                (() => {
+                                  const key = form.watch('credentials.apiKey');
+                                  if (!key) return undefined;
+                                  try {
+                                    const parsed = JSON.parse(key);
+                                    return parsed?.access_token ? key : undefined;
+                                  } catch {
+                                    return undefined;
+                                  }
+                                })()
+                              }
+                              onSuccess={(credentials) => {
+                                form.setValue('credentials.apiKey', credentials, {
+                                  shouldDirty: true,
+                                  shouldValidate: true,
+                                });
                               }}
                               onError={(error) => {
                                 toast.error(error);
